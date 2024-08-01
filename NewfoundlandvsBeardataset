@@ -1,0 +1,18 @@
+# NewfoundlandvsBear Dataset
+
+This dataset contains images categorized into two classes: `Bear` and `Newfoundland`.
+
+## Directory Structure
+
+The dataset is split into three sets:
+- `train/` - Contains the training images.
+- `validation/` - Contains the validation images.
+- `test/` - Contains the test images.
+
+Each of these directories has two subdirectories:
+- `Bear/` - Contains images of bears.
+- `Newfoundland/` - Contains images of Newfoundlands.
+
+
+
+
