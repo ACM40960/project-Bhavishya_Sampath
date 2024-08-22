@@ -1,0 +1,175 @@
+from flask import Flask, request, redirect
+import os
+import numpy as np
+from sklearn.model_selection import KFold
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Flatten, Dropout
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+# Constants
+EPOCHS = 15
+BATCH_SIZE = 32
+IMAGE_SIZE = (150, 150)
+NUM_CLASSES = 2
+seed_value = 42
+
+app = Flask(__name__)
+
+# Define the classes
+classes = ['Bear', 'Newfoundland']
+
+# Function to build the model
+def build_model():
+    model = Sequential([
+        Flatten(input_shape=(*IMAGE_SIZE, 3)),
+        Dense(512, activation='relu'),
+        Dropout(0.5),
+        Dense(NUM_CLASSES, activation='softmax')
+    ])
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+# K-Fold Cross-Validation
+def perform_kfold_cross_validation(train_data_dir):
+    kf = KFold(n_splits=5, shuffle=True, random_state=seed_value)
+    acc_scores = []
+
+    datagen = ImageDataGenerator(rescale=1.0 / 255.0)
+    train_generator = datagen.flow_from_directory(
+        train_data_dir,
+        target_size=IMAGE_SIZE,
+        batch_size=BATCH_SIZE,
+        class_mode='categorical',
+        shuffle=True
+    )
+
+    for train_index, val_index in kf.split(np.arange(len(train_generator))):
+        model = build_model()
+
+        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6)
+        checkpoint = ModelCheckpoint('best_model.keras', monitor='val_loss', save_best_only=True)
+
+        history = model.fit(
+            train_generator,
+            epochs=EPOCHS,
+            callbacks=[early_stopping, reduce_lr, checkpoint]
+        )
+
+        acc_scores.append(max(history.history['accuracy']))
+
+    # Return the best model
+    model.load_weights('best_model.keras')
+    return model
+
+# Load or train the model
+if not os.path.exists('best_model.keras'):
+    model = perform_kfold_cross_validation('./NewfoundlandvsBear/train')
+else:
+    model = load_model('best_model.keras')
+
+# Define the route for the homepage
+@app.route('/')
+def home():
+    return '''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Newfoundland vs Bear: The Ultimate Classifier</title>
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+        <style>
+            body {{
+                background-color: lightpink;
+            }}
+            .jumbotron {{
+                background-color: #e9ecef;
+                padding: 2rem 1rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container mt-5">
+            <div class="jumbotron text-center">
+                <h1 class="display-4">Newfoundland vs Bear Classifier</h1>
+                <p class="lead">Ever wondered if that furry friend is a giant dog or an actual bear? Don't worry, we got you covered! Simply upload a picture and we'll let you know whether to fetch the leash or run for your life!</p>
+                <form action="/predict" method="POST" enctype="multipart/form-data" class="mt-4">
+                    <div class="form-group">
+                        <input type="file" name="file" class="btn btn-primary">
+                    </div>
+                    <button type="submit" class="btn btn-success">Upload and Predict</button>
+                </form>
+            </div>
+        </div>
+    </body>
+    </html>
+    '''
+
+# Define the route for handling image uploads and making predictions
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'file' not in request.files:
+        return redirect(request.url)
+    
+    file = request.files['file']
+    if file.filename == '':
+        return redirect(request.url)
+    
+    if file:
+        filepath = os.path.join('uploads', file.filename)
+        os.makedirs('uploads', exist_ok=True)
+        file.save(filepath)
+        
+        img = image.load_img(filepath, target_size=IMAGE_SIZE)
+        img_array = image.img_to_array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        img_array = img_array / 255.0
+        
+        prediction = model.predict(img_array)
+        class_idx = np.argmax(prediction, axis=1)[0]
+        class_name = classes[class_idx]
+        
+        os.remove(filepath)
+        
+        return f'''
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Newfoundland vs Bear: The Ultimate Classifier</title>
+            <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+            <style>
+                body {{
+                    background-color: lightpink;
+                }}
+                .jumbotron {{
+                    background-color: #e9ecef;
+                    padding: 2rem 1rem;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container mt-5">
+                <div class="jumbotron text-center">
+                    <h1 class="display-4">Newfoundland vs Bear Classifier</h1>
+                    <p class="lead">Ever wondered if that furry friend is a giant dog or an actual bear? Don't worry, we got you covered! Simply upload a picture and we'll let you know whether to fetch the leash or run for your life!</p>
+                    <form action="/predict" method="POST" enctype="multipart/form-data" class="mt-4">
+                        <div class="form-group">
+                            <input type="file" name="file" class="btn btn-primary">
+                        </div>
+                        <button type="submit" class="btn btn-success">Upload and Predict</button>
+                    </form>
+                    <hr class="my-4">
+                    <h2>Prediction: {class_name}</h2>
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+
+if __name__ == '__main__':
+    app.run(debug=True)
